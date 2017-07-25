@@ -1,0 +1,424 @@
+---
+title: "Gray-2017-informativeAA"
+author: "Vanessa E. Gray and Douglas M. Fowler"
+date: "May 19, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library('reshape2')
+library('matrixStats')
+library('ggplot2')
+library('Hmisc')
+library('corrplot')
+library('car')
+library('networkD3')
+library('RColorBrewer')
+library('MESS')
+library('gplots')
+
+ ## Make ggplot pretty
+ggplot <- function(...) { ggplot2::ggplot(...) + 
+                           theme(panel.background = element_rect(fill='white', colour='black'), # Wt bkg, blk border
+                                 panel.grid.major = element_blank(),  # Hide major gridlines
+                                 panel.grid.minor = element_blank(),  # Hide minor gridlines
+                                 legend.key = element_rect(fill="white", size = 0.5))
+  }
+```
+
+Figure 1. General effects of amino acid mutations
+
+```{r}
+
+data <- read.csv("informativeAA_20170404.csv", header =  TRUE)
+data.x <- data[which(data$aa2 != "X"),]                                   ## Remove stop
+data.f <- data.x[which(data.x$aa1 != factor(data.x$aa2)),]                ## Remove synonymous mutations
+
+## Cast data into AA2 and protein matrix
+effects.aa <- dcast(data.f, aa2~protein, value.var = 'scaled_effect1', fun.aggregate = mean)
+
+### Setup data
+effects.mat <- as.matrix(sapply(effects.aa[2:15], as.numeric))
+row.names(effects.mat) <- as.matrix(effects.aa[,1])
+
+## Define color
+hmcols<-colorRampPalette(c('#800026','#bd0026','#fc4e2a','#fed976','#ffffcc', 'white'))(256)
+
+##Make heatmap
+heatmap.2(as.matrix(effects.mat), scale = "column", trace ="none", col=hmcols, density = "none", sepwidth=c(0.05,0.05),sepcolor="black", colsep=1:ncol(as.matrix(effects.mat)), rowsep=1:nrow(as.matrix(effects.mat)))
+
+## Get the minimum and maximum AA info for each dataset
+mins <- apply(effects.mat, 2, min)
+maxes <- apply(effects.mat, 2, max)
+
+## Get most diruptive AA of each data set
+rownames(as.matrix(effects.mat))[apply(as.matrix(effects.mat),2,which.min)]
+
+## Get most tolerated AA of each data set
+rownames(as.matrix(effects.mat))[apply(as.matrix(effects.mat),2,which.max)]
+
+```
+
+Figure 2A-B. The effects of histidine substitutions are similar to the effect of the median substitution
+
+```{r}
+## Read in data. Remove stop mutations. Remove positions with < 19 mutations
+
+data.x <- data[which(data$aa2 != "X"),]
+data.y <- data.x[which(data.x$position_count == 19),]
+data.f <- data.y[which(factor(data.y$aa1) != factor(data.y$aa2)),]
+
+## Cast data into AA2 and position matrix
+effects <- dcast(data.f, position_id~aa2, value.var = 'scaled_effect1', fun.aggregate = mean)
+
+## Calculate median mutational effect of each position. Add column
+median <- apply(effects[2:21], 1, median, na.rm = TRUE)
+effects.m <- cbind(effects, median)
+
+## Calculate the difference between amino acid and median effect
+difference <- effects.m[2:21] - effects.m$median
+difference.1 <- cbind(effects.m[1],difference)
+
+## Calculate the median difference score for each amino acid 
+AminoAcidmedian <- apply(difference.1[2:21], 2, median, na.rm = TRUE)
+
+## Plot AA median difference from positional median
+AminoAcidmedian.m <- melt(AminoAcidmedian)
+AminoAcidmedian.m1 <- as.data.frame(AminoAcidmedian.m)
+AAnames <- names(AminoAcidmedian)
+AminoAcidmedian.m2 <- cbind(AAnames,AminoAcidmedian.m1)
+
+ggplot(AminoAcidmedian.m2, aes(AAnames,value)) + geom_bar( stat = "identity",fill = "#2c7bb6") +  xlab("Amino acid") + ylab("Median difference from positional median") + geom_hline(yintercept = 0, color = "#d7191c", lwd =1.5) + coord_flip() + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) +ylim(-0.10,0.05)
+
+## Wilcoxon Rank Sum analysis
+Wtest <- apply(effects.m[2:21],2,function(x) wilcox.test(effects.m$median, x, na.action = na.omit, paired = TRUE))
+
+#Extract p-values for each amino acid
+wilcoxon <- sapply(Wtest, function(x) {
+    p <- x$p.value
+    p <- as.vector(p)
+    p
+})
+
+# Extract N for each test
+Wnum <- data.frame("AA" = names(apply(effects.m[2:21],2,function(x) length(na.omit(x)))), "N" = apply(effects.m[2:21],2,function(x) length(na.omit(x))))
+
+# Put N and p-values together and Bonferroni correct
+wilcoxon.df = data.frame("AA" = names(wilcoxon), "P-value" = wilcoxon)
+wilcoxon.table = merge(Wnum, wilcoxon.df, by = "AA")
+wilcoxon.table$Bonferroni.corrected.P.value = 20*wilcoxon.df$P.value
+
+
+# Plot p-values
+barplot(wilcoxon.table$Bonferroni.corrected.P.value, names.arg = wilcoxon.table$AA, xlab = "Amino acid", ylab = "Wilcoxon Rank Sum P-value")
+
+# Write the supplementary table
+write.table(wilcoxon.table, file = "~/FigS1_wilcoxon_table.csv", sep = ",", row.names = FALSE)
+
+## Variance analysis
+AminoAcidSD <- apply(difference.1[2:21], 2, sd, na.rm = TRUE)
+AminoAcidSD.m <- melt(AminoAcidSD)
+AminoAcidSD.m1 <- as.data.frame(AminoAcidSD.m)
+AAnames <- rownames(AminoAcidSD.m)
+AminoAcidSD.m2 <- cbind(AAnames,AminoAcidSD.m1)
+ggplot(AminoAcidSD.m2, aes(AAnames,value)) + geom_bar( stat = "identity",fill = "#2c7bb6") +  xlab("Amino acid") + ylab("Standard deviation \n") +  coord_flip()+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black')) + ylim(0,0.35)
+
+## Figure 1 supplement-- normalization
+
+
+myPal = c('#9e0142','#d53e4f','#f46d43','#fdae61','#fee08b','#ffffbf','#e6f598','#abdda4','#66c2a5','#3288bd','#5e4fa2','#3f007d', 'gray', 'black', 'white', 'pink')
+
+scaledEffectHistogram <- ggplot(data, aes(x=scaled_effect1, y = (..count..)/sum(..count..),fill = protein)) + geom_histogram(color = "black") + xlim(0,1.5)  + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + scale_fill_manual(values= myPal)+ xlab("Normalized variant effect score") + ylab("Frequency of variants") + scale_y_continuous(labels = scales::percent, limits = c(0,0.50))
+
+scaledEffectHistogram
+
+## Supplementary figure 1A: Reported fitness distribution 
+reportedEffectHistogram <- ggplot(data, aes(x=reported_fitness, y = (..count..)/sum(..count..),fill = protein)) + geom_histogram(color ='black') + xlim(-10,2)  + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + scale_fill_manual(values = myPal)+ xlab("Reported variant effect score") + ylab("Percent of variants") + scale_y_continuous(labels = scales::percent, limits = c(0,0.50)) 
+
+reportedEffectHistogram
+
+```
+
+Figure 2C-D. Histidine substitutions best represent the effects of other substitutions. 
+
+```{r}
+## Filter out stop and missense
+data.x <- data[which(data$aa2 != "X"),]
+data.f <- data.x[which(data.x$aa1 != data.x$aa2),]
+
+## Cast data into AA2 and position matrix
+effects <- dcast(data.f, position_id~aa2, value.var = 'scaled_effect1', fun.aggregate = mean)
+
+## Calculate median mutational effect of each position. Add column
+median <- apply(effects[2:21], 1, median, na.rm = TRUE)
+effects.m <- cbind(effects, median)
+
+## Pearson correlation analysis
+correlations  <- cor(effects.m[2:21], use = "pairwise.complete.obs")
+
+## Supplement Fig 2
+## Create correlation matrix plot
+palette <- colorRampPalette(c( 'white','white','#dfc27d','#018571'))(256)
+corrplot.mixed(correlations, lower = "number",upper = "color", order = "hclust",tl.col="black", addgrid.col="black",cl.lim=c(0,1), col = palette)
+
+## Figure 2C
+correlations.m <- melt(correlations)
+correlations.m <- correlations.m[which(correlations.m$Var1 != correlations.m$Var2),]
+ggplot( correlations.m, aes(Var2, value)) + geom_boxplot(fill = '#2c7bb6', lwd =.75)  + xlab("Amino Acid") + ylab ("Correlation with other \namino acids (Pearson's R)") + theme(axis.text=element_text(size=14, color='black'), axis.title=element_text(size=14,face="bold")) + coord_flip()
+
+## Force directed diagram
+## Calculate correlations for force network
+#Rename i and j amino acids with a number -- this is necessary for d3forceDirected()
+correlations.m$Var1 <- recode(correlations.m$Var1, "'A'=0; 'C'=1;'D'=2;'E'=3;'F'=4;'G'=5;'H'=6;'I'=7;'K'=8;'L'=9;'M'=10;'N'=11;'P'=12;'Q'=13;'R'=14;'S'=15;'T'=16;'V'=17;'W'=18;'Y'=19", as.factor.result = FALSE)
+correlations.m$Var2 <- recode(correlations.m$Var2, "'A'=0;  'C'=1;'D'=2;'E'=3;'F'=4;'G'=5;'H'=6;'I'=7;'K'=8;'L'=9;'M'=10;'N'=11;'P'=12;'Q'=13;'R'=14;'S'=15;'T'=16;'V'=17;'W'=18;'Y'=19",as.factor.result = FALSE)
+
+## Get full amino acid names
+AAnames <- c("Alanine", "Cysteine", "Aspartic", "Glutamic", "Phenylalanine", "Glycine", "Histidine", "Isoleucine", "Lysine","Leucine", "Methionine", "Asparagine", "Proline", "Glutamine", "Arginine", "Serine","Threonine", "Valine", "Tryptophan", "Tyrosine")
+
+# Label amino acids by hydrophbicity classes. Positive charge = 0, Negative charge = 1, Polar uncharged = 2, Special = 3, Hydrophobic = 4
+class <- c(4,3,1,1,4,3,0,4,0,4,4,2,3,2,0,2,2,4,4,4)
+
+# Make nodes with names and class
+nodes <- cbind(AAnames,class)
+nodes1 <- as.data.frame(nodes)
+
+#Make force directed graph w/ top 50% of correlations
+links50 <- correlations.m[which(correlations.m$value > quantile(correlations.m$value, .6)),]
+
+## Function to set a color palette to our data
+scalecolors <- function(nodes, palette) {
+  cols <- rev(RColorBrewer::brewer.pal(5, palette))
+  cols <- paste0("'", paste(cols, collapse = "', '"), "'")
+  networkD3::JS(paste0('d3.scale.ordinal().domain([0,', 4, ']).range([', cols, '])'))
+}
+
+## Figure 2D
+### Create  force-directed graph
+forceNetwork(Links = links50, Nodes = nodes1, Source = "Var1", Target = "Var2", Value = "value", NodeID = "AAnames", Group = "class",height = 700, width = 1000, charge = -6000, fontSize = 12, legend = TRUE, colourScale = scalecolors(nodes1, 'Dark2'), opacity = 1, linkColour = "darkgray", zoom = FALSE, opacityNoHover = FALSE, fontFamily = "Arial Black" )
+
+```
+
+Figure 3. Structural context impacts the effects of mutations
+
+```{r}
+
+data.x <- data[which(data$aa2 != "X"),]  
+data.f <- data.x[which(factor(data.x$aa1) != factor(data.x$aa2)),]
+
+### Graph correlations between mean effects of each amino acid in three secondary structural contexts
+data.s <- data.f[which(data.f$dssp_sec_str == "H" | data.f$dssp_sec_str == "T" | data.f$dssp_sec_str == "E"),]
+effects.aa <- dcast(data.s, aa2~dssp_sec_str, value.var = 'scaled_effect1', fun.aggregate = function(X) median(X, na.rm=TRUE))
+                    
+## helix vs. Strand
+ggplot(effects.aa, aes(x = H, y = E)) + geom_point(alpha = 0.6, color = "white") + geom_text(aes(label = aa2 ), position=position_jitter(width=0,height=0), size = 4) + scale_fill_manual(values = "#D7191C")+ xlab("Helix: Median effect score") + ylab ("Strand: Median effect score")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(0.35,1) +ylim(0.35,1)
+
+cor(effects.aa$H, effects.aa$E, method = "spearman")
+
+## helix vs. turn
+ggplot(effects.aa, aes(x = H, y = T)) + geom_point(alpha = 0.6, color = "white") + geom_text(aes(label = aa2 ), position=position_jitter(width=0,height=0), size = 4) + scale_fill_manual(values = "#D7191C")+ xlab("Helix: Median effect score") + ylab ("Turn: Median effect score")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(0.4,1) +ylim(0.8,1)
+
+cor(effects.aa$H, effects.aa$T, method = "spearman")
+
+## Turn vs. Strand
+ggplot(effects.aa, aes(x = E, y = T)) + geom_point(alpha = 0.6, color = "white") + geom_text(aes(label = aa2 ), position=position_jitter(width=0,height=0), size = 4) + scale_fill_manual(values = "#D7191C")+ xlab("Strand: Median effect score") + ylab ("Turn: Median effect score")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(0.4,1) +ylim(0.7,1)
+
+cor(effects.aa$E, effects.aa$T, method = "spearman")
+
+## Cast data into AA2 and position + secondary structure matrix
+effects.s <- dcast(data.f, id3+dssp_sec_str~aa2, value.var = 'scaled_effect1', fun.aggregate = mean)
+
+## Figure 3A
+## Make distributions of mutational effects for each secondary structure type
+effects.s1 <- effects.s[2:22]
+helix <- melt(effects.s1[which(effects.s1$dssp_sec_str == "H"),])
+ggplot(helix, aes(value)) + geom_density(alpha = 0.6, color = "black", aes(y=..scaled.., fill = dssp_sec_str)) + scale_fill_manual(values = "#D7191C")+ xlab("Mutation effect score") + ylab ("Density")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(-1,1.5)
+
+turn <- melt(effects.s1[which( effects.s1$dssp_sec_str == "T"),])
+ggplot(turn, aes(value)) + geom_density(alpha = 0.6, color = "black",  aes(y=..scaled.., fill = dssp_sec_str)) + scale_fill_manual(values = "#ffffbf") + xlab("Mutation effect score") + ylab ("Density")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(-1,1.5)
+
+strand <- melt(effects.s1[which(effects.s1$dssp_sec_str == "E"),])
+ggplot(strand, aes(value, fill = dssp_sec_str)) + geom_density(alpha = 0.6, color = "black", aes(y=..scaled..)) + scale_fill_manual(values = "#2c7bb6") + xlab("Mutation effect score") + ylab ("Density")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black'), legend.position="top")+ xlim(-1,1.5)
+
+## Isolate positions with relevant structural information
+
+struct <- melt(effects.s1[which(effects.s1$dssp_sec_str == "H" | effects.s1$dssp_sec_str == "T" | effects.s1$dssp_sec_str == "E"),])
+
+## Mutational effect boxplots for each secondary structure type
+ggplot(struct[struct$dssp_sec_str == "H",], aes(variable, value)) +coord_flip() + geom_boxplot( alpha = 0.3,lwd=1, fill = "#d7191c", alpha = 0.5)  + xlab("Amino acid") + ylab("Effect scores")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + ylim(-0.5,1.5) + geom_hline(yintercept = median(helix$value, na.rm = T), lwd = 1, color = "black")
+
+ggplot(struct[struct$dssp_sec_str == "T",], aes(variable, value)) +coord_flip()  + geom_boxplot( alpha = 0.3,lwd=1, fill = "#ffffbf")  + xlab("Amino acid") + ylab("Effect scores")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold"))+ ylim(-0.5,1.5) + geom_hline(yintercept = median(turn$value, na.rm = T), lwd = 1, color = "black")
+
+ggplot(struct[struct$dssp_sec_str == "E",], aes(variable, value)) +coord_flip()  + geom_boxplot( alpha = 0.3,lwd=1, fill = "#2c7bb6", alpha = 0.5)  + xlab("Amino acid") + ylab("Effect scores")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold"))+ ylim(-0.5,1.5) + geom_hline(yintercept = median(beta$value, na.rm = T), lwd = 1, color = "black") 
+
+### Supplement Figure 3 corr plots
+## Separate data by secondary structure
+helix <- effects.s1[which(effects.s1$dssp_sec_str == "H"),]
+turn <- effects.s1[which(effects.s1$dssp_sec_str == "T"),]
+strand <- effects.s1[which(effects.s1$dssp_sec_str == "E"),]
+
+## Calcualte correlation correlations
+helix.c  <- melt(cor(helix[2:21], use = "pairwise.complete.obs"))
+turn.c  <- melt(cor(turn[2:21], use = "pairwise.complete.obs"))
+strand.c  <- melt(cor(strand[2:21], use = "pairwise.complete.obs"))
+
+## Remove synonymous comparisons
+helix.c1 <- helix.c[which(helix.c$Var1 != helix.c$Var2),]
+turn.c1 <- turn.c[which(turn.c$Var1 != turn.c$Var2),]
+strand.c1 <- strand.c[which(strand.c$Var1 != strand.c$Var2),]
+
+## Pearson boxplots for each secondary structure type
+ggplot(helix.c1, aes(Var2, value)) +coord_flip() + geom_jitter( color = "#d7191c", alpha = 0.6) + geom_boxplot( alpha = 0.3,lwd=1)  + xlab("Amino acid") + ylab("Correlation with other \n amino acids (Pearson's R)")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + ylim(0,1)
+ggplot(turn.c1, aes(Var2, value)) +coord_flip() + geom_jitter( color = "#fdae61", alpha = 0.6) + geom_boxplot( alpha = 0.3,lwd=1)  + xlab("Amino acid") + ylab("Correlation with other \n amino acids (Pearson's R)")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + ylim(0,1)
+ggplot(strand.c1, aes(Var2, value)) +coord_flip() + geom_jitter( color = "#2c7bb6", alpha = 0.6) + geom_boxplot( alpha = 0.3,lwd=1)  + xlab("Amino acid") + ylab("Correlation with other \n amino acids (Pearson's R)")+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + ylim(0,1)
+
+## Unmelted correlation calculations
+helix.c2  <- cor(helix[2:20], use = "pairwise.complete.obs")
+turn.c2  <- cor(turn[2:20], use = "pairwise.complete.obs")
+strand.c2  <- cor(strand[2:20], use = "pairwise.complete.obs")
+
+## Helix corrplot
+palette <- colorRampPalette(c( 'white','white','#fdae61','#d7191c'))(256)
+corrplot.mixed(helix.c2,upper = "color", order = "hclust",tl.col="black", cl.lim=c(0,1), col = palette, addgrid.col="black" )
+
+## Turn corrplot
+palette <- colorRampPalette(c( 'white','#ffffbf','#fee090','#fdae61'))(256)
+corrplot.mixed(turn.c2, upper = "color", order = "hclust",tl.col="black", cl.lim=c(0,1), col = palette, addgrid.col="black" )
+
+## Strand corrplot
+palette <- colorRampPalette(c( 'white','white','#abd9e9','#2c7bb6'))(256)
+corrplot.mixed(strand.c2, upper = "color", order = "hclust",tl.col="black", cl.lim=c(0,1), col = palette, addgrid.col="black" )
+
+
+```
+
+Figure 4. Alanine is not especially useful for identifying positions in protein-ligand interfaces.
+
+```{r}
+library('pROC')
+data.x <- data[which(data$aa2 != "X"),]
+data.f <- data.x[which(factor(data.x$aa1) != factor(data.x$aa2)),]
+
+data.c <- data.f[which(data.f$dms_id == 'PSD95pdz3' | data.f$dms_id =='gal4' | data.f$dms_id =='Brca1_Y2H' | data.f$dms_id =='WW_domain'),]
+
+## Figure 4A
+data.d <- data.c[which(data.c$man_contact_buried != "non_contact,NA"),]
+
+ggplot(data.d, aes(x = aa2, y = scaled_effect1, fill = man_contact_buried)) + geom_boxplot( width=.7,position = position_dodge(width=.7)) + xlab("Amino Acid") + ylab("Mutational effect") + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = "black"), legend.position = "top") + scale_fill_manual(values = c("#d73027", "#abd9e9", "#4575b4")) + geom_hline(yintercept=1)
+
+
+## Calculate AUC of scaled_effect1 for predicting interface vs. not
+
+## Calc auc for each AA type
+library('pROC')
+auc_manual = data.frame()
+
+for(AA in unique(data.d$aa2)) {
+  aa_df <- data.d[data.d$aa2 == AA,]
+  AUC <- auc(aa_df$manual_contact,aa_df$scaled_effect1)[1]
+  auc_manual = rbind(auc_manual, data.frame("AA" = AA, "AUC" = AUC))
+}
+
+auc_manual
+
+## Figure 4B
+ggplot(data = auc_manual, aes(x = reorder(AA, AUC), y = AUC)) + geom_bar(stat = "identity", fill = "#4575b4") + xlab("Amino Acid") + theme(axis.text=element_text(size=14, color = "black"), axis.title=element_text(size=14,face="bold"))
+
+## Look at an FPR of 5% and see which is best at that low FPR
+roc_data = data.frame()
+
+for(AA in unique(data.c$aa2)) {
+  aa_df <- data.c[data.c$aa2 == AA,]
+  ROC <- roc(aa_df$manual_contact,aa_df$scaled_effect1)
+  roc_data = rbind(roc_data, data.frame("AA" = AA, "TPR" = ROC$sensitivities, "FPR" =1-ROC$specificities))
+}
+roc_data
+
+
+tprs = data.frame()
+
+for(AA in unique(roc_data$AA)) {
+  aa_df = roc_data[roc_data$AA == AA,]
+  idx = which.min(abs(aa_df$FPR-0.05))
+  tprs = rbind(tprs, data.frame("AA" = AA, "TPR" = aa_df[idx[1],]$TPR))
+}
+
+tprs
+
+## Figure 4 supplement --TPR bargraph
+ggplot(data = tprs, aes(x = reorder(AA, TPR), y = TPR)) + geom_bar(stat = "identity", fill = "#018571") + xlab("Amino Acid") + theme(axis.text=element_text(size=14), axis.title=element_text(size=14,face="bold"))
+
+
+## Figure 4 supplement -- structure based distnce metric
+roc_data = data.frame()
+
+for(AA in unique(data.c$aa2)) {
+  aa_df <- data.c[data.c$aa2 == AA,]
+  ROC <- roc(aa_df$manual_contact,aa_df$scaled_effect1)
+  roc_data = rbind(roc_data, data.frame("AA" = AA, "specificity" = ROC$specificities, "sensitivity" = ROC$sensitivities, "threshold" = ROC$thresholds))
+}
+
+roc_data
+
+## Figure 4 supplement --ROC curves
+ggplot(data = roc_data, aes(x = 1-specificity, y = sensitivity, color = AA)) + facet_wrap(~ AA, ncol = 4) + geom_point() + geom_abline(slope = 1, intercept = 0)+ theme(legend.position = "none", axis.title=element_text(size=14,face="bold", color = "black")) 
+
+```
+
+Supplementary figure 2 analyses
+How does the original amino acid affect analyses?
+
+```{r}
+## Look at sample size for each AA pair
+data.x <- data[which(data$aa2 != "X"),]
+data.y <- data.x[which(data.x$position_count == 19),]
+data.f <- data.y[which(factor(data.y$aa1) != factor(data.y$aa2)),]
+
+aa_table <- table(data.f$aa1, factor(data.f$aa2))
+aa_tablem <- melt(aa_table)
+ggplot(aa_tablem, aes(x = Var2, y = Var1)) + geom_tile(aes(fill = value)) + xlab("Mutant amino acid") + ylab("Original amino acid")  + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold", color = 'black')) + scale_fill_distiller("Number of mutations", direction = 1,palette = "YlGnBu")
+          
+
+## Distribution of sample size
+ggplot(melt(aa_table), aes(value)) + geom_histogram(binwidth = 10)
+          
+## Show median effect of mutation from original AA
+## Cast data into AA1-AA2 matrix
+
+library('plyr')
+effects.aa1 <- ddply(data.f, c("aa1", "aa2"), summarise, median = median(scaled_effect1), count = length(scaled_effect1))
+
+
+ggplot(effects.aa1, aes(x = aa2, y = aa1, fill = median)) + geom_tile(aes(color = "black"), size =0.5) + theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + theme(axis.text.x = element_text(angle = 0, hjust = 1), legend.position = "top") + ylab("Original amino acid") + xlab("Mutant amino acid") + scale_fill_distiller( direction = 1,palette = "YlGnBu") + scale_color_manual( values = "black")
+
+```          
+
+What is the maximally representative amino acid when the original amino acid is considered
+
+```{r}
+
+effect_mat <- dcast(effects.aa1, aa1 ~ aa2, value.var = "median")
+medians <- apply(effect_mat[2:21],1, median, na.rm = T)
+effect_mat.1 <- cbind(effect_mat,medians)
+
+diffMedian <- as.matrix(effect_mat[2:21]) - medians
+rownames(diffMedian) <- effect_mat$aa1
+
+diffMedian.m <- melt(diffMedian)
+ggplot(diffMedian.m, aes(Var2, Var1, fill = value)) + geom_tile()+ theme(axis.text=element_text(size=14, color = 'black'), axis.title=element_text(size=14,face="bold")) + theme(axis.text.x = element_text(angle = 0, hjust = 1), legend.position = "top") + ylab("Original amino acid") + xlab("Mutant amino acid") + scale_fill_distiller("Difference from original amino acid", direction = 1,palette = "RdYlBu")
+
+cols <- c('#8dd3c7','#ffffb3','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9','#bc80bd','#ccebc5','#ffed6f', "#11c638", "#8dd593", "#c6dec7", "#ead3c6", "#f0b98d", "#ef9708", "#0fcfc0", "#9cded6", "#d5eae7", "#f3e1eb", "#f6c4e1", "#f79cd4")
+
+ggplot(diffMedian.m, aes(x = Var2, y = value, fill = Var2)) + geom_violin() + geom_text(aes(label = Var1 ), position=position_jitter(width=.25,height=0), size = 3.5,fontface = "bold") + theme( axis.text=element_text(size=10, color = 'black'), axis.title=element_text(size=10,face="bold")) + theme(axis.text.x = element_text(angle = 0, hjust = 1), legend.position = "top") + ylab("Difference from median") + xlab("Mutant amino acid") + scale_fill_manual(values = cols) + geom_hline(yintercept = 0) + ylim(c(-0.75,0.5))
+
+```
+
+Cluster original amino acids based on difference from median effects
+Aiming to say something about original amino acids tolerating or rejecting different amino acid substitutions
+
+```{r}
+ ## Heatmap.2 clusters with hclust. 
+library('gplots')
+my_palette <- colorRampPalette(c("blue", "black", "red"))(n = 1000)
+heatmap.2(diffMedian, na.color = "darkgray", col = my_palette, trace = "none", dendrogram = 'row')
+
+```
